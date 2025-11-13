@@ -1,0 +1,494 @@
+# Detailed Implementation Plan for Pairwise on Replit
+
+Based on your project document and the Replit interface, here's your step-by-step action plan:
+
+---
+
+## **Phase 1: Initial Setup & Project Structure** (Start Here)
+
+### Step 1: Create the Replit Project
+
+In the Replit interface you showed, click **"Start chat"** and describe:
+
+```
+Create a full-stack TypeScript monorepo with:
+- Frontend: React + Vite + TypeScript in /web folder
+- Backend: Express + Socket.io + TypeScript in /api folder  
+- Worker: Job processor in /worker folder
+- Shared types in /shared folder
+- Use pnpm workspaces
+- Include Tailwind CSS for styling
+```
+
+Or manually:
+1. Click **"Create App"** → Select **"Web app"**
+2. Choose **Node.js + TypeScript** template
+
+### Step 2: Set Up Monorepo Structure
+
+Create this folder structure:
+```
+pairwise/
+├── package.json (root workspace config)
+├── pnpm-workspace.yaml
+├── .env.example
+├── web/
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   └── components/
+├── api/
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── src/
+│   │   ├── index.ts
+│   │   ├── routes/
+│   │   ├── socket/
+│   │   └── db/
+├── worker/
+│   ├── package.json
+│   └── src/
+│       └── index.ts
+└── shared/
+    ├── package.json
+    └── src/
+        └── types.ts
+```
+
+### Step 3: Install Core Dependencies
+
+Root `package.json`:
+```json
+{
+  "name": "pairwise",
+  "private": true,
+  "workspaces": ["web", "api", "worker", "shared"],
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter web dev\" \"pnpm --filter api dev\"",
+    "build": "pnpm --filter web build && pnpm --filter api build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}
+```
+
+---
+
+## **Phase 2: Database Setup** (Critical Foundation)
+
+### Step 4: Set Up PostgreSQL
+
+**On Replit:**
+1. Go to **"Integrations"** tab (left sidebar)
+2. Search for **PostgreSQL** or use external service (Supabase/Neon)
+3. Get connection string → Add to `.env`
+
+**Or use Supabase (Recommended):**
+- Visit supabase.com → Create free project
+- Get `DATABASE_URL` from project settings
+
+### Step 5: Install Prisma & Define Schema
+
+In `/api` folder:
+```bash
+pnpm add prisma @prisma/client
+pnpm add -D prisma
+npx prisma init
+```
+
+Create `api/prisma/schema.prisma`:
+```prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  displayName   String?
+  email         String    @unique
+  hashedPassword String?
+  avatarUrl     String?
+  bio           String?
+  skills        String[]
+  createdAt     DateTime  @default(now())
+  lastSeen      DateTime?
+  
+  hostedSessions Session[] @relation("HostedSessions")
+  projects       Project[]
+  comments       InlineComment[]
+  reviews        Review[]  @relation("ReviewsGiven")
+  receivedReviews Review[] @relation("ReviewsReceived")
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  ownerId     String
+  name        String
+  description String?
+  repoUrl     String?
+  visibility  Visibility @default(PRIVATE)
+  createdAt   DateTime @default(now())
+  
+  owner    User      @relation(fields: [ownerId], references: [id])
+  files    File[]
+  sessions Session[]
+}
+
+model Session {
+  id          String    @id @default(uuid())
+  projectId   String?
+  hostId      String
+  title       String
+  description String?
+  status      SessionStatus @default(SCHEDULED)
+  startedAt   DateTime?
+  endedAt     DateTime?
+  recordingUrl String?
+  createdAt   DateTime  @default(now())
+  
+  host         User       @relation("HostedSessions", fields: [hostId], references: [id])
+  project      Project?   @relation(fields: [projectId], references: [id])
+  participants SessionParticipant[]
+  snapshots    Snapshot[]
+  comments     InlineComment[]
+  runs         Run[]
+}
+
+model Snapshot {
+  id              String   @id @default(uuid())
+  sessionId       String
+  authorId        String?
+  timestamp       DateTime @default(now())
+  description     String?
+  diff            Json     // {files: [{path, content}]}
+  baseSnapshotId  String?
+  persisted       Boolean  @default(false)
+  
+  session      Session    @relation(fields: [sessionId], references: [id])
+  comments     InlineComment[]
+  runs         Run[]
+}
+
+model InlineComment {
+  id          String   @id @default(uuid())
+  sessionId   String
+  snapshotId  String
+  filePath    String
+  range       Json     // {start: {line, col}, end: {line, col}}
+  authorId    String
+  text        String
+  status      CommentStatus @default(OPEN)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  session  Session  @relation(fields: [sessionId], references: [id])
+  snapshot Snapshot @relation(fields: [snapshotId], references: [id])
+  author   User     @relation(fields: [authorId], references: [id])
+}
+
+model Run {
+  id          String    @id @default(uuid())
+  sessionId   String?
+  snapshotId  String?
+  status      RunStatus @default(QUEUED)
+  stdout      String?
+  stderr      String?
+  exitCode    Int?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  meta        Json?
+  
+  session  Session?  @relation(fields: [sessionId], references: [id])
+  snapshot Snapshot? @relation(fields: [snapshotId], references: [id])
+}
+
+model SessionParticipant {
+  id        String   @id @default(uuid())
+  sessionId String
+  userId    String
+  role      ParticipantRole
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+  
+  session Session @relation(fields: [sessionId], references: [id])
+}
+
+model File {
+  id        String   @id @default(uuid())
+  projectId String
+  path      String
+  content   String
+  createdAt DateTime @default(now())
+  
+  project Project @relation(fields: [projectId], references: [id])
+}
+
+model Review {
+  id          String   @id @default(uuid())
+  sessionId   String
+  reviewerId  String
+  revieweeId  String
+  rating      Int      // 1-5
+  text        String?
+  createdAt   DateTime @default(now())
+  
+  reviewer User @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  reviewee User @relation("ReviewsReceived", fields: [revieweeId], references: [id])
+}
+
+enum Visibility {
+  PRIVATE
+  TEAM
+  PUBLIC
+}
+
+enum SessionStatus {
+  SCHEDULED
+  LIVE
+  FINISHED
+  CANCELLED
+}
+
+enum CommentStatus {
+  OPEN
+  RESOLVED
+  CLOSED
+}
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+enum ParticipantRole {
+  HOST
+  DRIVER
+  OBSERVER
+  MENTOR
+}
+```
+
+Run migrations:
+```bash
+npx prisma migrate dev --name init
+npx prisma generate
+```
+
+---
+
+## **Phase 3: Build Minimal Backend API** (Day 1-2)
+
+### Step 6: Create Express Server with Socket.io
+
+`api/src/index.ts`:
+```typescript
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import { PrismaClient } from '@prisma/client';
+
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: process.env.CLIENT_URL || 'http://localhost:5173' }
+});
+
+const prisma = new PrismaClient();
+
+app.use(cors());
+app.use(express.json());
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Auth routes
+app.post('/api/auth/register', async (req, res) => {
+  // TODO: implement with bcrypt
+});
+
+// Session routes
+app.post('/api/sessions', async (req, res) => {
+  const { title, projectId } = req.body;
+  const session = await prisma.session.create({
+    data: {
+      title,
+      projectId,
+      hostId: req.user.id, // Add auth middleware
+      status: 'SCHEDULED'
+    }
+  });
+  res.json(session);
+});
+
+// Socket.io for realtime collaboration
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+  
+  socket.on('join-session', (sessionId) => {
+    socket.join(`session:${sessionId}`);
+  });
+  
+  socket.on('editor-change', (data) => {
+    socket.to(`session:${data.sessionId}`).emit('editor-change', data);
+  });
+  
+  socket.on('cursor-move', (data) => {
+    socket.to(`session:${data.sessionId}`).emit('cursor-move', data);
+  });
+});
+
+const PORT = process.env.PORT || 3001;
+httpServer.listen(PORT, () => {
+  console.log(`API running on port ${PORT}`);
+});
+```
+
+---
+
+## **Phase 4: Build Frontend Session Editor** (Day 3-4)
+
+### Step 7: Install Monaco Editor
+
+In `/web`:
+```bash
+pnpm add @monaco-editor/react socket.io-client
+```
+
+### Step 8: Create Session Editor Component
+
+`web/src/components/SessionEditor.tsx`:
+```typescript
+import Editor from '@monaco-editor/react';
+import { useEffect, useState } from 'react';
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:3001');
+
+export function SessionEditor({ sessionId }: { sessionId: string }) {
+  const [code, setCode] = useState('// Start coding...');
+  const [cursors, setCursors] = useState<any[]>([]);
+
+  useEffect(() => {
+    socket.emit('join-session', sessionId);
+    
+    socket.on('editor-change', (data) => {
+      setCode(data.code);
+    });
+    
+    socket.on('cursor-move', (data) => {
+      setCursors(prev => [...prev.filter(c => c.userId !== data.userId), data]);
+    });
+    
+    return () => {
+      socket.off('editor-change');
+      socket.off('cursor-move');
+    };
+  }, [sessionId]);
+
+  const handleChange = (value: string | undefined) => {
+    setCode(value || '');
+    socket.emit('editor-change', { sessionId, code: value });
+  };
+
+  return (
+    <div className="h-screen">
+      <Editor
+        height="100%"
+        defaultLanguage="typescript"
+        value={code}
+        onChange={handleChange}
+        theme="vs-dark"
+        options={{
+          minimap: { enabled: false },
+          fontSize: 14,
+        }}
+      />
+    </div>
+  );
+}
+```
+
+---
+
+## **Phase 5: Test Your MVP** (Day 5)
+
+### Step 9: Run Everything
+
+In Replit terminal:
+```bash
+# Terminal 1: Start API
+cd api && pnpm dev
+
+# Terminal 2: Start Frontend
+cd web && pnpm dev
+```
+
+Open two browser tabs → Same session ID → Type in one, see in other!
+
+---
+
+## **What to Build Next** (Priority Order)
+
+### Week 1: Core Features
+- ✅ Monaco editor sync
+- ✅ Socket.io realtime
+- ⬜ Snapshot creation on button click
+- ⬜ Display snapshot timeline
+
+### Week 2: Review Features  
+- ⬜ Inline comments UI
+- ⬜ Diff viewer between snapshots
+- ⬜ Comment threads panel
+
+### Week 3: Sandbox Runner
+- ⬜ Docker worker setup
+- ⬜ Run button → execute code
+- ⬜ Stream logs to UI
+
+### Week 4: Polish
+- ⬜ Session replay UI
+- ⬜ GitHub import
+- ⬜ Basic auth (email/password)
+
+---
+
+## **Key Replit-Specific Tips**
+
+1. **Use Replit Secrets** for environment variables (lock icon in sidebar)
+2. **Expose ports**: Replit auto-exposes 3000/3001 - configure in `.replit` file
+3. **Use Replit DB** for quick prototyping: `import Database from '@replit/database'`
+4. **Deploy**: Click "Deploy" button when ready (it's that easy!)
+
+---
+
+## **Immediate Next Steps (Right Now!)**
+
+Type this in the Replit chat:
+```
+Create a TypeScript monorepo with:
+1. Frontend (React + Vite) in /web with Monaco editor
+2. Backend (Express + Socket.io) in /api  
+3. Set up pnpm workspaces
+4. Install @monaco-editor/react and socket.io-client
+5. Create a basic session editor component with realtime sync
+```
+
+Then follow up with: "Now add Prisma with PostgreSQL and create the User, Session, and Snapshot models"
+
+Want me to generate specific code files you can copy-paste directly?
