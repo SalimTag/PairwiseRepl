@@ -143,9 +143,10 @@ Preferred communication style: Simple, everyday language.
 - ✅ **E2E testing verified**: Complete snapshot create → restore → back to live flow tested
 
 **Implementation Notes:**
-- `linesChanged` metadata represents total lines in snapshot files (snapshot size metric), not diff delta against previous snapshot
-- For true diff calculation (added/removed lines), would need to compare against base/previous snapshot
-- Legacy snapshots (array format) are handled on read without database migration
+- `linesChanged` metadata represents diff delta against most recent snapshot (absolute line count difference per file)
+- For first snapshot in a session, linesChanged equals total lines (all lines treated as "added")
+- Diff calculation includes files that were added, modified, or removed between snapshots
+- Legacy snapshots (array format) are handled on read with backward compatibility
 - WebSocket events currently support snapshot creation broadcasts; update/delete events not implemented
 
 ### Known Issues

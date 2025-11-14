@@ -172,16 +172,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Extract files from request body
       const filesData = req.body.diff?.files || {};
       
-      // Compute metadata server-side
-      // Note: linesChanged represents total lines in snapshot files (not diff delta)
-      // For true diff calculation, would need to compare against base/previous snapshot
+      // Get most recent snapshot for diff calculation
+      const previousSnapshots = await db
+        .select()
+        .from(snapshots)
+        .where(eq(snapshots.sessionId, sessionId))
+        .orderBy(desc(snapshots.timestamp))
+        .limit(1);
+      
       const filesModified = Object.keys(filesData);
-      const totalLines = Object.values(filesData).reduce((sum: number, content: any) => {
-        return sum + (typeof content === 'string' ? content.split('\n').length : 0);
-      }, 0);
+      let linesChanged = 0;
+      
+      if (previousSnapshots.length > 0) {
+        // Calculate diff against previous snapshot
+        const prevDiff = previousSnapshots[0].diff as any;
+        const prevFiles = prevDiff?.files || {};
+        
+        // Compare current files with previous snapshot
+        for (const [path, content] of Object.entries(filesData)) {
+          const currentLines = (content as string).split('\n').length;
+          const prevContent = prevFiles[path] || '';
+          const prevLines = typeof prevContent === 'string' ? prevContent.split('\n').length : 0;
+          linesChanged += Math.abs(currentLines - prevLines);
+        }
+        
+        // Add lines from files that were removed
+        for (const [path, content] of Object.entries(prevFiles)) {
+          if (!filesData[path]) {
+            const prevLines = typeof content === 'string' ? (content as string).split('\n').length : 0;
+            linesChanged += prevLines;
+          }
+        }
+      } else {
+        // First snapshot: all lines are "added"
+        linesChanged = Object.values(filesData).reduce((sum: number, content: any) => {
+          return sum + (typeof content === 'string' ? content.split('\n').length : 0);
+        }, 0);
+      }
       
       const metadata = {
-        linesChanged: totalLines, // Total lines in all files (snapshot size metric)
+        linesChanged, // Diff delta against previous snapshot (or total if first)
         filesModified,
       };
       
