@@ -126,6 +126,28 @@ Preferred communication style: Simple, everyday language.
 - ✅ End-to-end testing verified all critical user flows
 - ✅ Visual design following VS Code/Linear/GitHub patterns with Inter and Fira Code fonts
 
+### Snapshot/Time-Travel System Implementation (November 14, 2025)
+- ✅ **Complete snapshot system** with restore and time-travel capabilities
+- ✅ **Backend API endpoints**: GET /api/snapshots/:id for full snapshot retrieval
+- ✅ **Server-side metadata computation**: Backend calculates total lines and files modified
+- ✅ **Snapshot format**: Normalized `{ files: Record<string,string>, metadata: { linesChanged, filesModified } }`
+- ✅ **Backward compatibility**: Restore logic handles both Record and legacy Array snapshot formats
+- ✅ **Real-time collaboration**: WebSocket 'snapshot-created' events broadcast to all session participants
+- ✅ **Client-side snapshot refresh**: Automatic snapshot list updates when new snapshots are created
+- ✅ **SnapshotTimeline component**: Displays snapshots with metadata badges (file count, total lines)
+- ✅ **Restore functionality**: Click "Restore" button to view historical snapshot in read-only mode
+- ✅ **Read-only mode**: Monaco editor becomes read-only when viewing snapshots
+- ✅ **"Viewing snapshot" banner**: Amber warning banner with timestamp when in snapshot view
+- ✅ **"Back to Live" functionality**: Exits snapshot view and refetches latest files from database
+- ✅ **File persistence integration**: Snapshots work seamlessly with database-backed file storage
+- ✅ **E2E testing verified**: Complete snapshot create → restore → back to live flow tested
+
+**Implementation Notes:**
+- `linesChanged` metadata represents total lines in snapshot files (snapshot size metric), not diff delta against previous snapshot
+- For true diff calculation (added/removed lines), would need to compare against base/previous snapshot
+- Legacy snapshots (array format) are handled on read without database migration
+- WebSocket events currently support snapshot creation broadcasts; update/delete events not implemented
+
 ### Known Issues
 - Vite HMR WebSocket warnings in browser console (cosmetic, does not affect functionality)
 - Monaco editor focus quirk (minor interaction issue, does not block usage)

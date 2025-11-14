@@ -23,6 +23,7 @@ interface SessionEditorProps {
   onTakeSnapshot?: (description: string) => void;
   onEndSession?: () => void;
   currentUserId?: string;
+  readOnly?: boolean;
 }
 
 export function SessionEditor({
@@ -32,6 +33,7 @@ export function SessionEditor({
   onTakeSnapshot,
   onEndSession,
   currentUserId,
+  readOnly = false,
 }: SessionEditorProps) {
   const defaultFiles: FileNode[] = [
     {
@@ -242,6 +244,7 @@ export function SessionEditor({
               minimap: { enabled: false },
               fontSize: 14,
               fontFamily: "'Fira Code', 'Monaco', monospace",
+              readOnly,
               lineNumbers: "on",
               renderWhitespace: "selection",
               scrollBeyondLastLine: false,

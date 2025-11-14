@@ -168,15 +168,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/sessions/:id/snapshots", async (req, res) => {
     try {
       const sessionId = req.params.id;
+      
+      // Extract files from request body
+      const filesData = req.body.diff?.files || {};
+      
+      // Compute metadata server-side
+      // Note: linesChanged represents total lines in snapshot files (not diff delta)
+      // For true diff calculation, would need to compare against base/previous snapshot
+      const filesModified = Object.keys(filesData);
+      const totalLines = Object.values(filesData).reduce((sum: number, content: any) => {
+        return sum + (typeof content === 'string' ? content.split('\n').length : 0);
+      }, 0);
+      
+      const metadata = {
+        linesChanged: totalLines, // Total lines in all files (snapshot size metric)
+        filesModified,
+      };
+      
+      // Normalize snapshot format
+      const normalizedDiff = {
+        files: filesData,
+        metadata,
+      };
+      
       const validatedData = insertSnapshotSchema.parse({
-        ...req.body,
+        description: req.body.description,
+        authorId: req.body.authorId,
         sessionId,
+        diff: normalizedDiff,
       });
+      
       const snapshot = await storage.createSnapshot(validatedData);
+      
+      // Broadcast snapshot-created event via WebSocket
+      if (activeConnections.has(sessionId)) {
+        broadcast(sessionId, {
+          type: 'snapshot-created',
+          snapshotId: snapshot.id,
+          sessionId,
+          timestamp: snapshot.timestamp,
+          author: req.body.authorId,
+          description: snapshot.description,
+          metadata,
+        });
+      }
+      
       res.status(201).json(snapshot);
     } catch (error: any) {
       console.error("Error creating snapshot:", error);
       res.status(400).json({ error: error.message || "Failed to create snapshot" });
+    }
+  });
+
+  app.get("/api/snapshots/:id", async (req, res) => {
+    try {
+      const snapshotId = req.params.id;
+      const [snapshot] = await db
+        .select()
+        .from(snapshots)
+        .where(eq(snapshots.id, snapshotId));
+      
+      if (!snapshot) {
+        return res.status(404).json({ error: "Snapshot not found" });
+      }
+      
+      res.json(snapshot);
+    } catch (error) {
+      console.error("Error fetching snapshot:", error);
+      res.status(500).json({ error: "Failed to fetch snapshot" });
     }
   });
 

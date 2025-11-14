@@ -1,7 +1,8 @@
 import { formatDistanceToNow } from "date-fns";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Clock, MessageSquare, Camera } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Clock, MessageSquare, Camera, RotateCcw } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Snapshot } from "@shared/schema";
 
@@ -9,9 +10,19 @@ interface SnapshotTimelineProps {
   snapshots: (Snapshot & { author?: { username: string; avatarUrl: string | null }; _count?: { comments: number } })[];
   currentSnapshotId?: string;
   onSelectSnapshot?: (snapshotId: string) => void;
+  onRestoreSnapshot?: (snapshotId: string) => void;
 }
 
-export function SnapshotTimeline({ snapshots, currentSnapshotId, onSelectSnapshot }: SnapshotTimelineProps) {
+export function SnapshotTimeline({ snapshots, currentSnapshotId, onSelectSnapshot, onRestoreSnapshot }: SnapshotTimelineProps) {
+  const getSnapshotMetadata = (snapshot: Snapshot) => {
+    const diff = snapshot.diff as any;
+    if (diff?.files) {
+      const fileCount = Object.keys(diff.files).length;
+      const linesChanged = diff.metadata?.linesChanged || 0;
+      return { fileCount, linesChanged };
+    }
+    return { fileCount: 0, linesChanged: 0 };
+  };
   if (!snapshots || snapshots.length === 0) {
     return (
       <div className="p-4">
@@ -78,7 +89,7 @@ export function SnapshotTimeline({ snapshots, currentSnapshotId, onSelectSnapsho
                   )}
                 </div>
 
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <div className="flex items-center gap-3 text-xs text-muted-foreground mb-3">
                   <div className="flex items-center gap-1">
                     <Clock className="h-3 w-3" />
                     <span>{formatDistanceToNow(new Date(snapshot.timestamp), { addSuffix: true })}</span>
@@ -90,6 +101,35 @@ export function SnapshotTimeline({ snapshots, currentSnapshotId, onSelectSnapsho
                     </div>
                   )}
                 </div>
+
+                {(() => {
+                  const { fileCount, linesChanged } = getSnapshotMetadata(snapshot);
+                  if (fileCount > 0 || linesChanged > 0) {
+                    return (
+                      <Badge variant="secondary" className="mb-2 text-xs">
+                        {fileCount} {fileCount === 1 ? 'file' : 'files'}
+                        {linesChanged > 0 && `, ${linesChanged > 0 ? '+' : ''}${linesChanged} lines`}
+                      </Badge>
+                    );
+                  }
+                  return null;
+                })()}
+
+                {!isSelected && onRestoreSnapshot && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full mt-2"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRestoreSnapshot(snapshot.id);
+                    }}
+                    data-testid={`button-restore-${snapshot.id}`}
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    Restore
+                  </Button>
+                )}
               </div>
             </div>
           );

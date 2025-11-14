@@ -1,0 +1,129 @@
+PRIORITY TASK: Implement Snapshot System (Task 4)
+
+Build a complete snapshot/time-travel system for the session editor. This is our killer feature that differentiates us from VS Code Live Share and GitHub.
+
+## Requirements:
+
+### 1. Database Schema (Prisma)
+Update the Snapshot model in schema.prisma:
+- Ensure fields: id, sessionId, authorId, timestamp, description, files (JSON), metadata (JSON)
+- files format: { "src/App.tsx": "content here", "src/utils.ts": "content here" }
+- metadata format: { linesChanged: number, filesModified: string[] }
+- Add indexes on sessionId and timestamp
+- Run migration after updating schema
+
+### 2. Backend API (Express)
+Create these endpoints in /api/src/routes/snapshots.ts:
+
+POST /api/sessions/:sessionId/snapshots
+- Body: { description: string, files: Record<string, string> }
+- Calculate metadata (lines changed, files modified)
+- Save to database
+- Emit Socket.io event 'snapshot-created' to session room
+- Return created snapshot with id and timestamp
+
+GET /api/sessions/:sessionId/snapshots
+- Return all snapshots for session ordered by timestamp ASC
+- Include author info (username, avatar)
+- Include file count and lines changed in response
+
+GET /api/snapshots/:snapshotId
+- Return full snapshot with all file contents
+- Use for loading snapshot into editor
+
+### 3. Frontend Components
+
+#### SnapshotTimeline.tsx (Left Sidebar)
+- Collapsible sidebar (300px wide when open, 48px when closed)
+- Toggle button at top with snapshot icon
+- List all snapshots as vertical timeline cards
+- Each card shows:
+  * Relative timestamp (use date-fns: "2 minutes ago")
+  * Author avatar + username
+  * Description (truncated to 2 lines)
+  * Metadata badge (e.g., "3 files, +24 lines")
+  * "Restore" button (primary action)
+- Highlight currently loaded snapshot with accent border
+- Auto-scroll to newest snapshot
+- Empty state: "No snapshots yet. Save your first snapshot!"
+
+#### Snapshot Controls in SessionEditor.tsx
+Add to editor toolbar (top bar):
+- "Save Snapshot" button with camera icon
+  * Opens modal/dialog to enter description
+  * Default description: "Snapshot at [time]"
+  * Shows preview of files that changed
+  * Confirm button triggers snapshot creation
+- "Current Snapshot" indicator showing which snapshot is loaded
+- "Back to Live" button when viewing old snapshot (to return to latest code)
+
+#### State Management
+- Add state: currentSnapshotId (null = live editing, id = viewing snapshot)
+- Add state: snapshots (array of snapshot objects)
+- When snapshot loaded: disable editor (read-only mode) + show warning banner
+- When "Back to Live" clicked: re-enable editor, load latest files from database
+
+### 4. Socket.io Events
+In /api/src/socket/index.ts:
+
+Emit 'snapshot-created' when snapshot saved:
+- Payload: { snapshotId, sessionId, timestamp, author, description }
+- Broadcast to all users in session room
+
+Listen for 'request-snapshots' from clients:
+- Send full snapshot list when user joins session
+
+### 5. Integration with Existing Editor
+In SessionEditor.tsx:
+- When "Restore" clicked on snapshot:
+  * Fetch snapshot files from GET /api/snapshots/:id
+  * Load files into Monaco editors
+  * Set currentSnapshotId state
+  * Show banner: "Viewing snapshot from [timestamp]. Click 'Back to Live' to resume editing."
+  * Disable editor modifications (readOnly: true)
+
+- When "Back to Live" clicked:
+  * Fetch current files from database (latest versions)
+  * Load into editors
+  * Set currentSnapshotId = null
+  * Remove banner
+  * Enable editing (readOnly: false)
+
+### 6. UI/UX Details
+- Use Tailwind CSS for styling
+- Sidebar animation: smooth slide-in/out (300ms transition)
+- Snapshot cards: hover effect with subtle shadow
+- Loading states: skeleton cards while fetching
+- Error handling: toast notifications for failed saves
+- Optimistic updates: add snapshot to list immediately, rollback if save fails
+- Debounce snapshot saves: prevent rapid-fire clicking (min 2 seconds between saves)
+
+### 7. Testing Checklist
+After implementation, verify:
+- [ ] Create snapshot saves all open files correctly
+- [ ] Snapshot timeline shows all saved snapshots
+- [ ] Clicking snapshot loads old code into editor
+- [ ] Editor becomes read-only when viewing old snapshot
+- [ ] "Back to Live" returns to current code
+- [ ] Socket.io broadcasts snapshot to other users in real-time
+- [ ] Metadata (lines changed) calculates correctly
+- [ ] Multiple users can view different snapshots simultaneously
+
+## Expected File Changes:
+- /api/prisma/schema.prisma (update Snapshot model)
+- /api/src/routes/snapshots.ts (new file)
+- /api/src/socket/index.ts (add snapshot events)
+- /web/src/components/SnapshotTimeline.tsx (new file)
+- /web/src/components/SessionEditor.tsx (integrate snapshot controls)
+- /web/src/hooks/useSnapshots.ts (new file - optional custom hook)
+
+## Success Criteria:
+When done, I should be able to:
+1. Open a session with another user
+2. Make code changes
+3. Click "Save Snapshot" and enter description
+4. See snapshot appear in timeline for both users
+5. Click old snapshot to view previous code
+6. Click "Back to Live" to return to current editing
+
+Start with the database schema, then backend API, then frontend components. Let me know when each part is complete so I can test incrementally.

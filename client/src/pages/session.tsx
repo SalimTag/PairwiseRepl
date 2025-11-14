@@ -8,7 +8,7 @@ import { CommentPanel } from "@/components/comment-panel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChevronLeft, ChevronRight, Users, Clock, Camera, MessageSquare } from "lucide-react";
+import { ChevronLeft, ChevronRight, Users, Clock, Camera, MessageSquare, RotateCcw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -25,6 +25,8 @@ export default function SessionPage() {
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [currentSnapshotId, setCurrentSnapshotId] = useState<string | undefined>();
   const [currentFileContent, setCurrentFileContent] = useState<Record<string, string>>({});
+  const [isViewingSnapshot, setIsViewingSnapshot] = useState(false);
+  const [snapshotFiles, setSnapshotFiles] = useState<any[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const saveTimerRef = useRef<Record<string, NodeJS.Timeout>>({});
 
@@ -76,6 +78,19 @@ export default function SessionPage() {
       if (message.type === 'participant-joined' || message.type === 'participant-left') {
         queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "participants"] });
       }
+      
+      if (message.type === 'snapshot-created') {
+        // Refresh snapshot list when new snapshot is created
+        queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "snapshots"] });
+        
+        // Show toast notification if created by another user
+        if (message.author !== currentUserId) {
+          toast({
+            title: "New snapshot",
+            description: message.description || "A collaborator created a snapshot",
+          });
+        }
+      }
     };
 
     wsRef.current = socket;
@@ -90,14 +105,16 @@ export default function SessionPage() {
 
   const createSnapshotMutation = useMutation({
     mutationFn: async (description: string) => {
+      const filesObject: Record<string, string> = {};
+      Object.entries(currentFileContent).forEach(([path, content]) => {
+        filesObject[path] = content;
+      });
+      
       return apiRequest("POST", `/api/sessions/${sessionId}/snapshots`, {
         description,
         authorId: currentUserId,
         diff: {
-          files: Object.entries(currentFileContent).map(([path, content]) => ({
-            path,
-            content,
-          })),
+          files: filesObject,
         },
       });
     },
@@ -209,6 +226,93 @@ export default function SessionPage() {
     updateCommentStatusMutation.mutate({ commentId, status: "open" });
   };
 
+  const handleRestoreSnapshot = async (snapshotId: string) => {
+    try {
+      const response = await fetch(`/api/snapshots/${snapshotId}`);
+      
+      if (!response.ok) {
+        console.error('Snapshot fetch failed:', response.status, response.statusText);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const snapshot = await response.json();
+      console.log('Snapshot data:', snapshot);
+      
+      const diffData = snapshot.diff as any;
+      let filesFromSnapshot: any[] = [];
+      
+      // Handle both new format (Record) and legacy format (Array)
+      if (diffData?.files) {
+        if (Array.isArray(diffData.files)) {
+          // Legacy format: array of {path, content}
+          filesFromSnapshot = diffData.files.map((file: any) => ({
+            name: file.path.split('/').pop() || file.path,
+            path: file.path,
+            type: 'file',
+            content: file.content,
+          }));
+        } else if (typeof diffData.files === 'object') {
+          // New format: Record<string, string>
+          filesFromSnapshot = Object.entries(diffData.files).map(([path, content]) => ({
+            name: path.split('/').pop() || path,
+            path,
+            type: 'file',
+            content: content as string,
+          }));
+        }
+      }
+      
+      if (filesFromSnapshot.length === 0) {
+        console.error('No files in snapshot diff:', diffData);
+        throw new Error('Snapshot has no files');
+      }
+      
+      console.log('Restored files:', filesFromSnapshot);
+      
+      setSnapshotFiles(filesFromSnapshot);
+      setIsViewingSnapshot(true);
+      setCurrentSnapshotId(snapshotId);
+      
+      toast({
+        title: "Snapshot loaded",
+        description: `Viewing snapshot from ${new Date(snapshot.timestamp).toLocaleString()}`,
+      });
+    } catch (error) {
+      console.error('Restore snapshot error:', error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to load snapshot",
+      });
+    }
+  };
+
+  const handleBackToLive = async () => {
+    try {
+      // Exit snapshot view mode
+      setIsViewingSnapshot(false);
+      setSnapshotFiles([]);
+      setCurrentSnapshotId(undefined);
+      
+      // Refetch latest files from database to ensure state is current
+      await queryClient.refetchQueries({ 
+        queryKey: ["/api/projects", session?.projectId, "files"] 
+      });
+      
+      toast({
+        title: "Back to live editing",
+        description: "Editing mode restored with latest changes",
+      });
+    } catch (error) {
+      console.error('Error returning to live mode:', error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to reload live files",
+      });
+    }
+  };
+
   const handleEndSession = () => {
     setLocation("/");
   };
@@ -292,6 +396,7 @@ export default function SessionPage() {
                   snapshots={snapshots || []}
                   currentSnapshotId={currentSnapshotId}
                   onSelectSnapshot={setCurrentSnapshotId}
+                  onRestoreSnapshot={handleRestoreSnapshot}
                 />
               </TabsContent>
               <TabsContent value="participants" className="flex-1 overflow-hidden m-0">
@@ -302,18 +407,39 @@ export default function SessionPage() {
         )}
 
         <div className="flex-1 flex flex-col overflow-hidden">
+          {isViewingSnapshot && (
+            <div className="bg-amber-500/20 border-b border-amber-500/50 px-4 py-2 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm">
+                <Camera className="h-4 w-4" />
+                <span className="font-medium">Viewing snapshot</span>
+                <span className="text-muted-foreground">
+                  - Read-only mode. Click "Back to Live" to resume editing.
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={handleBackToLive}
+                data-testid="button-back-to-live"
+              >
+                <RotateCcw className="h-4 w-4 mr-1" />
+                Back to Live
+              </Button>
+            </div>
+          )}
           <SessionEditor
             sessionId={sessionId}
-            initialFiles={files?.map((f: any) => ({
+            initialFiles={isViewingSnapshot ? snapshotFiles : (files?.map((f: any) => ({
               name: f.name,
               path: f.path,
               type: f.type || 'file',
               content: f.content || '',
-            })) || []}
-            onCodeChange={handleCodeChange}
+            })) || [])}
+            onCodeChange={isViewingSnapshot ? undefined : handleCodeChange}
             onTakeSnapshot={handleTakeSnapshot}
             onEndSession={handleEndSession}
             currentUserId={currentUserId}
+            readOnly={isViewingSnapshot}
           />
         </div>
 
