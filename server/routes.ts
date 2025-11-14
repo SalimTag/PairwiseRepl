@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { insertSessionSchema, insertSnapshotSchema, insertInlineCommentSchema, insertFileSchema, insertProjectSchema } from "@shared/schema";
 import { db } from "./db";
-import { users, sessions, snapshots, inlineComments, sessionParticipants } from "@shared/schema";
+import { users, sessions, snapshots, inlineComments, sessionParticipants, files } from "@shared/schema";
 import { eq, desc, count } from "drizzle-orm";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -297,6 +297,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/projects/:projectId/files", async (req, res) => {
+    try {
+      const projectId = req.params.projectId;
+      const validatedData = insertFileSchema.parse({
+        ...req.body,
+        projectId,
+      });
+      const file = await storage.createFile(validatedData);
+      res.status(201).json(file);
+    } catch (error: any) {
+      console.error("Error creating file:", error);
+      res.status(400).json({ error: error.message || "Failed to create file" });
+    }
+  });
+
+  app.patch("/api/files/:id", async (req, res) => {
+    try {
+      const fileId = req.params.id;
+      const { content } = req.body;
+      
+      if (content === undefined) {
+        return res.status(400).json({ error: "Content is required" });
+      }
+
+      await storage.updateFileContent(fileId, content);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error updating file:", error);
+      res.status(500).json({ error: "Failed to update file" });
+    }
+  });
+
+  app.delete("/api/files/:id", async (req, res) => {
+    try {
+      const fileId = req.params.id;
+      await db.delete(files).where(eq(files.id, fileId));
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting file:", error);
+      res.status(500).json({ error: "Failed to delete file" });
+    }
+  });
+
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
   const activeConnections = new Map<string, Set<WebSocket>>();
@@ -314,16 +357,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             currentSessionId = message.sessionId;
             userId = message.userId || 'anonymous';
             
-            if (!activeConnections.has(currentSessionId)) {
+            if (currentSessionId && !activeConnections.has(currentSessionId)) {
               activeConnections.set(currentSessionId, new Set());
             }
-            activeConnections.get(currentSessionId)!.add(ws);
-
-            broadcast(currentSessionId, {
-              type: 'participant-joined',
-              userId,
-              timestamp: Date.now(),
-            }, ws);
+            if (currentSessionId) {
+              activeConnections.get(currentSessionId)!.add(ws);
+              
+              broadcast(currentSessionId, {
+                type: 'participant-joined',
+                userId,
+                timestamp: Date.now(),
+              }, ws);
+            }
             break;
 
           case 'editor-change':

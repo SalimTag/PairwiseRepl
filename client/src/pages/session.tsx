@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { SessionEditor } from "@/components/session-editor";
@@ -26,9 +26,15 @@ export default function SessionPage() {
   const [currentSnapshotId, setCurrentSnapshotId] = useState<string | undefined>();
   const [currentFileContent, setCurrentFileContent] = useState<Record<string, string>>({});
   const wsRef = useRef<WebSocket | null>(null);
+  const saveTimerRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   const { data: session, isLoading: sessionLoading } = useQuery<Session & { host: { username: string; avatarUrl: string | null } }>({
     queryKey: ["/api/sessions", sessionId],
+  });
+
+  const { data: files } = useQuery<any[]>({
+    queryKey: ["/api/projects", session?.projectId, "files"],
+    enabled: !!session?.projectId,
   });
 
   const { data: snapshots } = useQuery<(Snapshot & { author?: { username: string; avatarUrl: string | null }; _count?: { comments: number } })[]>({
@@ -39,7 +45,7 @@ export default function SessionPage() {
     queryKey: ["/api/sessions", sessionId, "comments"],
   });
 
-  const { data: participants } = useQuery({
+  const { data: participants } = useQuery<any[]>({
     queryKey: ["/api/sessions", sessionId, "participants"],
   });
 
@@ -142,6 +148,12 @@ export default function SessionPage() {
     },
   });
 
+  const updateFileMutation = useMutation({
+    mutationFn: async ({ fileId, content }: { fileId: string; content: string }) => {
+      return apiRequest("PATCH", `/api/files/${fileId}`, { content });
+    },
+  });
+
   const handleCodeChange = (code: string, filePath: string) => {
     setCurrentFileContent((prev) => ({
       ...prev,
@@ -156,6 +168,17 @@ export default function SessionPage() {
         filePath,
       }));
     }
+
+    const file = files?.find((f: any) => f.path === filePath);
+    if (file) {
+      if (saveTimerRef.current[filePath]) {
+        clearTimeout(saveTimerRef.current[filePath]);
+      }
+      
+      saveTimerRef.current[filePath] = setTimeout(() => {
+        updateFileMutation.mutate({ fileId: file.id, content: code });
+      }, 1500);
+    }
   };
 
   useEffect(() => {
@@ -163,6 +186,12 @@ export default function SessionPage() {
       setCurrentSnapshotId(snapshots[snapshots.length - 1].id);
     }
   }, [snapshots, currentSnapshotId]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(saveTimerRef.current).forEach(timer => clearTimeout(timer));
+    };
+  }, []);
 
   const handleTakeSnapshot = (description: string) => {
     createSnapshotMutation.mutate(description);
@@ -275,6 +304,12 @@ export default function SessionPage() {
         <div className="flex-1 flex flex-col overflow-hidden">
           <SessionEditor
             sessionId={sessionId}
+            initialFiles={files?.map((f: any) => ({
+              name: f.name,
+              path: f.path,
+              type: f.type || 'file',
+              content: f.content || '',
+            })) || []}
             onCodeChange={handleCodeChange}
             onTakeSnapshot={handleTakeSnapshot}
             onEndSession={handleEndSession}
@@ -285,7 +320,7 @@ export default function SessionPage() {
         {isRightPanelOpen && (
           <div className="w-80 border-l bg-card flex flex-col shrink-0">
             <CommentPanel
-              comments={comments || []}
+              comments={(comments as any) || []}
               onAddComment={handleAddComment}
               onResolveComment={handleResolveComment}
               onUnresolveComment={handleUnresolveComment}
